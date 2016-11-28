@@ -547,20 +547,14 @@ static int handle_notification_data(__attribute__((unused)) merlin_node *node, v
 		struct host *h = find_host(ds->host_name);
 		if (!h)
 			return -1;
-		h->current_notification_number = (int)(uintptr_t)(ds->object_ptr);
-		h->last_notification = ds->start_time.tv_sec;
-		h->next_notification = ds->end_time.tv_sec;
-		h->no_more_notifications = ds->start_time.tv_usec;
-		add_notified_on(h, ds->state);
+
+		//host_notification(h, ds->notification_type, ds->ack_author, ds->ack_data, NOTIFICATION_OPTION_FORCED);
 	} else {
 		struct service *s = find_service(ds->host_name, ds->service_description);
 		if (!s)
 			return -1;
-		s->current_notification_number = (int)(uintptr_t)(ds->object_ptr);
-		s->last_notification = ds->start_time.tv_sec;
-		s->next_notification = ds->end_time.tv_sec;
-		s->no_more_notifications = ds->start_time.tv_usec;
-		add_notified_on(s, ds->state);
+
+		//service_notification(s, ds->notification_type, ds->ack_author, ds->ack_data, NOTIFICATION_OPTION_FORCED);
 	}
 	return 0;
 }

@@ -205,6 +205,16 @@ static int send_host_status(merlin_event *pkt, int nebattr, host *obj)
 	return send_generic(pkt, &st_obj);
 }
 
+static int send_custom_host_status(uint16_t selection, host *obj)
+{
+	merlin_event pkt;
+	memset(&pkt, 0, sizeof(pkt));
+	pkt.hdr.type = NEBCALLBACK_HOST_STATUS_DATA;
+	pkt.hdr.selection = selection;
+
+	return send_host_status(&pkt, NEBATTR_NONE, obj);
+}
+
 static int send_service_status(merlin_event *pkt, int nebattr, service *obj)
 {
 	merlin_service_status st_obj;
@@ -225,9 +235,18 @@ static int send_service_status(merlin_event *pkt, int nebattr, service *obj)
 	st_obj.host_name = obj->host_name;
 	st_obj.service_description = obj->description;
 	MOD2NET_STATE_VARS(st_obj.state, obj);
-	pkt->hdr.selection = DEST_PEERS_MASTERS;
 
 	return send_generic(pkt, &st_obj);
+}
+
+static int send_custom_service_status(uint16_t selection, service *obj)
+{
+	merlin_event pkt;
+	memset(&pkt, 0, sizeof(pkt));
+	pkt.hdr.type = NEBCALLBACK_SERVICE_STATUS_DATA;
+	pkt.hdr.selection = selection;
+
+	return send_service_status(&pkt, NEBATTR_NONE, obj);
 }
 
 static inline int should_run_check(unsigned int id)
@@ -732,6 +751,7 @@ static int hook_host_status(merlin_event *pkt, void *data)
 	/* Only owning node is allowed to send status updates */
 	node = pgroup_host_node(((host *)ds->object_ptr)->id);
 	if (node == &ipc) {
+		pkt->hdr.selection = DEST_PEERS_MASTERS;
 		return send_host_status(pkt, ds->attr, ds->object_ptr);
 	}
 	return 0;
@@ -744,6 +764,7 @@ static int hook_service_status(merlin_event *pkt, void *data)
 	/* Only owning node is allowed to send status updates */
 	node = pgroup_service_node(((service *)ds->object_ptr)->id);
 	if (node == &ipc) {
+		pkt->hdr.selection = DEST_PEERS_MASTERS;
 		return send_service_status(pkt, ds->attr, ds->object_ptr);
 	}
 	return 0;
@@ -779,11 +800,6 @@ static neb_cb_result * hook_notification(merlin_event *pkt, void *data)
 	const char *owning_node_name = NULL;
 
 	if (ds->type == NEBTYPE_NOTIFICATION_END){
-
-		/* Always propagate results to peers and masters */
-		pkt->hdr.selection = DEST_PEERS_MASTERS;
-		int ret = 0;
-
 		if (ds->notification_type == HOST_NOTIFICATION) {
 			host *hst = ds->object_ptr;
 			ds->object_ptr = (void *)(uintptr_t)(hst->current_notification_number);
@@ -801,19 +817,7 @@ static neb_cb_result * hook_notification(merlin_event *pkt, void *data)
 		} else {
 			lerr("Unknown notification type %i", ds->notification_type);
 		}
-
-		ret = send_generic(pkt, data);
-
-		if (ret == NEBERROR_CALLBACKCANCEL || ret == NEBERROR_CALLBACKOVERRIDE) {
-			const char *err_type = ret == NEBERROR_CALLBACKCANCEL ? "cancel" : "override";
-			lerr("Possible bug! Return from send_generic() triggered %s for notification end", err_type);
-			return neb_cb_result_create_full(ret,
-					"This might be a bug! Return from send_generic() triggered %s for notification end",
-					err_type);
-		}
-		else {
-			return neb_cb_result_create(ret);
-		}
+		return neb_cb_result_create(0);
 	}
 
 	/* don't count or (try to) block notifications after they're sent */
@@ -851,6 +855,24 @@ static neb_cb_result * hook_notification(merlin_event *pkt, void *data)
 	if (online_masters && !(ipc.flags & MERLIN_NODE_NOTIFIES)) {
 		ldebug("notif: poller blocking notification in favour of master");
 		mns->master++;
+
+		/* Send a message to a master letting them know they need to notify */
+		pkt->hdr.selection = noc_table[0]->id;
+
+		/*
+		 * First send the latest state of the of the host to the master
+		 * so it can be used when notifying.
+		 */
+
+		if(ds->notification_type == HOST_NOTIFICATION) {
+			send_custom_host_status(pkt->hdr.selection, ds->object_ptr);
+		} else {
+			send_custom_service_status(pkt->hdr.selection, ds->object_ptr);
+		}
+
+		/* Finally, tell the master to notify */
+		send_generic(pkt, data);
+
 		return neb_cb_result_create_full(NEBERROR_CALLBACKCANCEL,
 				"Notification will be handled by master(s)");
 	}
